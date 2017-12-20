@@ -2,7 +2,6 @@ package kate.cache;
 
 
 import org.junit.Assert;
-import org.junit.Before;
 import org.junit.Test;
 
 public class CacheTest {
@@ -54,6 +53,7 @@ public class CacheTest {
         Thread.sleep(100);
         cache.put("foo-bar", "foobar-value");
 
+        Assert.assertEquals(cache.getSize(), 3);
         // самый старый уходит
         Assert.assertNull(cache.get("foo"));
         // второй все еще тут

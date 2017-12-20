@@ -12,46 +12,53 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.*;
 
-public class Cache<K,V> {
+public class Cache<K, V> {
 
     private ConcurrentHashMap<K, Bucket<V>> memoryCache = new ConcurrentHashMap<>();
     private String logPath = "log";
-    private int size;
-    private int lifetime = 600;
+    private int size = 100;
+    private int lifetime = 600000;
     private Future<?> evictionFuture = null;
 
     public void setLifetime(int lifetime) {
         this.lifetime = lifetime;
     }
 
+    public int getSize() {
+        return memoryCache.size();
+    }
+
     public void setSize(int size) {
         this.size = size;
     }
 
-    public synchronized void addCache(Object o) {
-        if (memoryCache.size() < size) {
-            memoryCache.put(new Bucket(o), LocalDateTime.now());
-        } else {
-            cleanCache();
-            memoryCache = new ConcurrentHashMap<>();
-        }
-    }
-
     public void put(K key, V value) {
         // завернуть в корзину, проверить по политике не переполнен ли кэш, заустить evict() если переполнен и полжить корзину по ключу
+        if (memoryCache.size() >= size)
+            evict();
+        memoryCache.put(key, new Bucket<>(value));
 
-        throw new UnsupportedOperationException("not implemented");
+        //throw new UnsupportedOperationException("not implemented");
     }
 
     // если значение по ключу есть, то вернем завернутым в optional , если нет, то null
     public Optional<V> get(K key) {
+        if (memoryCache.get(key) == null) return null;
+        if (memoryCache.get(key).getAccessed() > System.currentTimeMillis() - lifetime) {
+            memoryCache.get(key).accessedNow();
+            return memoryCache.get(key).getEntity();
+        } else {
+            return null;
+        }
+
+
         // извлечь корзину, если ее нет вернуть null, если есть проверить по политике не истек ли
         // срок хранения, обновить время последнего доступа accessedNow и вернуть значение
-        throw new UnsupportedOperationException("not implemented");
+        // throw new UnsupportedOperationException("not implemented");
     }
 
     public void evict() {
-        if(evictionFuture != null && !evictionFuture.isDone()) {
+        if (evictionFuture != null && !evictionFuture.isDone()) {
             // уже очищаем, значит все придется ждать окончания и еще раз запустить
             try {
                 evictionFuture.get();
@@ -64,10 +71,10 @@ public class Cache<K,V> {
             }
         }
         evictionFuture = Executors.newSingleThreadExecutor().submit(() -> {
-            long minAccessesd = Long.MIN_VALUE;
+            long minAccessed = Long.MIN_VALUE;
             K minKey = null;
             for (Map.Entry<K, Bucket<V>> e : memoryCache.entrySet()) {
-                if (e.getValue().getAccessed() > minAccessesd) {
+                if (e.getValue().getAccessed() > minAccessed) {
                     minKey = e.getKey();
                 }
             }
@@ -79,7 +86,7 @@ public class Cache<K,V> {
 
     }
 
-    public synchronized void cleanCache() {
+    public synchronized void moveToFile() {
 
         String fileName = "Cache_" + LocalDateTime.now().toString().replace(':', '-').replace('.', '-') + ".txt";
 
@@ -90,7 +97,7 @@ public class Cache<K,V> {
         try {
             ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(file.getAbsoluteFile()));
 
-            for (Map.Entry<Bucket, LocalDateTime> e : memoryCache.entrySet())
+            for (Map.Entry<K, Bucket<V>> e : memoryCache.entrySet())
                 out.writeObject(e.getKey());
 
             out.close();
@@ -120,8 +127,8 @@ public class Cache<K,V> {
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        for (Map.Entry<Bucket, LocalDateTime> e : memoryCache.entrySet())
-            sb.append("Object: ").append(e.getKey().getEntity()).append(" ; timestamp: ").append(e.getValue()).append("\n");
+        for (Map.Entry<K, Bucket<V>> e : memoryCache.entrySet())
+            sb.append("Key : ").append(e.getKey()).append(" ; Object : ").append(e.getValue()).append("\n");
         return sb.toString();
     }
 }

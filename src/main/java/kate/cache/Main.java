@@ -1,38 +1,18 @@
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+package kate.cache;
 
 public class Main {
 
-    public static void main(String args[]) throws InterruptedException {
+    public static void main(String args[]) {
 
-        CacheChooser cacheChooser = new CacheChooser();
-        cacheChooser.setSize(6);
-        Runnable taskString = () -> {
-            cacheChooser.addCache("muffin");
-        };
-        taskString.run();
-        Runnable taskInt = () -> {
-            cacheChooser.addCache(35);
-        };
-        taskInt.run();
-        Runnable taskNull = () -> {
-            cacheChooser.addCache(null);
-        };
-        taskNull.run();
-        Thread[] threads = {new Thread(taskString), new Thread(taskString), new Thread(taskString),
-                new Thread(taskInt), new Thread(taskInt), new Thread(taskInt),
-                new Thread(taskNull), new Thread(taskNull), new Thread(taskNull)};
-        ExecutorService executor = Executors.newWorkStealingPool();
-        for (Thread t : threads) {
-            t.join();
-            executor.submit(t);
-            //t.start();
-            TimeUnit.SECONDS.sleep(2);
-
+        Cache cache = new Cache();
+        if(args[0] != null) {
+            cache.setSize(Integer.parseInt(args[0]));
+        }
+        if(args[1] != null) {
+            cache.setLifetime(Integer.parseInt(args[1]));
         }
 
-        System.out.println(cacheChooser.toString());
+        System.out.println(cache.toString());
     }
 
 }
