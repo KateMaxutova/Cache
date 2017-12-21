@@ -1,16 +1,26 @@
 package kate.cache;
 
-
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 
-public class CacheTest {
+import java.io.File;
+
+abstract public class CacheTest {
+
+    protected Cache<String, String> cache;
+    protected String folder;
+
+    @Before
+    public void setUp(){
+        cache.setLogPath(folder);
+        cache.cleanCacheFolder();
+    }
 
     @Test
     public void putAndGet() {
-        Cache<String, String> cache = new Cache<>();
 
-        Assert.assertNull(cache.get("foo"));
+        Assert.assertFalse(cache.get("foo").isPresent());
 
         cache.put("foo", "foo-value");
 
@@ -26,7 +36,6 @@ public class CacheTest {
 
     @Test
     public void putAndWaitExpirationGet() throws InterruptedException {
-        Cache<String, String> cache = new Cache<>();
 
         cache.setLifetime(500);
         cache.put("foo", "foo-value");
@@ -36,13 +45,12 @@ public class CacheTest {
         Assert.assertEquals("foo-value", fv1);
 
         Thread.sleep(1000);
-        Assert.assertNull(cache.get("foo"));
+        Assert.assertFalse(cache.get("foo").isPresent());
 
     }
 
     @Test
     public void evictionTest() throws InterruptedException {
-        Cache<String, String> cache = new Cache<>();
 
         cache.setSize(3);
         cache.put("foo", "foo-value");
@@ -53,12 +61,10 @@ public class CacheTest {
         Thread.sleep(100);
         cache.put("foo-bar", "foobar-value");
 
-        Assert.assertEquals(cache.getSize(), 3);
-        // самый старый уходит
-        Assert.assertNull(cache.get("foo"));
-        // второй все еще тут
+        // самый старый уходит в файл
+        Assert.assertTrue(new File(folder + File.separator + "foo.txt").exists());
+        // второй остается в памяти
         Assert.assertEquals("bar-value", cache.get("bar").get());
 
     }
-
 }

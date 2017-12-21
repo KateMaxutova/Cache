@@ -5,6 +5,8 @@ import java.util.Optional;
 
 public class Bucket<V> implements Serializable {
 
+    private static final long serialVersionUID = 1L;
+
     private final V entity;
     private final long created = System.currentTimeMillis();
     private long accessed = System.currentTimeMillis();
@@ -13,16 +15,16 @@ public class Bucket<V> implements Serializable {
         entity = o;
     }
 
+    public long getAccessed() {
+        return accessed;
+    }
+
     public Optional<V> getEntity() {
         return Optional.ofNullable(entity);
     }
 
     public long getCreated() {
         return created;
-    }
-
-    public long getAccessed() {
-        return accessed;
     }
 
     public void accessedNow() {

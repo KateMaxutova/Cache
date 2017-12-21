@@ -1,63 +1,91 @@
 package kate.cache;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.ObjectOutputStream;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.io.*;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
-public class Cache<K, V> {
+abstract public class Cache<K, V> {
 
-    private ConcurrentHashMap<K, Bucket<V>> memoryCache = new ConcurrentHashMap<>();
-    private String logPath = "log";
+    protected ConcurrentHashMap<K, Bucket<V>> memoryCache = new ConcurrentHashMap<>();
+    protected String logPath = "cache";
     private int size = 100;
     private int lifetime = 600000;
-    private Future<?> evictionFuture = null;
+    protected Future<?> evictionFuture = null;
+    protected Future<?> cleanFolderFuture = null;
+
+    protected boolean isAlive(Long lastAccessed) {
+        return lastAccessed > System.currentTimeMillis() - getLifetime();
+    }
+
+    public int getLifetime() {
+        return lifetime;
+    }
 
     public void setLifetime(int lifetime) {
         this.lifetime = lifetime;
     }
 
-    public int getSize() {
-        return memoryCache.size();
+    public void setLogPath(String logPath) {
+        this.logPath = logPath;
     }
 
     public void setSize(int size) {
         this.size = size;
     }
 
-    public void put(K key, V value) {
-        // завернуть в корзину, проверить по политике не переполнен ли кэш, заустить evict() если переполнен и полжить корзину по ключу
-        if (memoryCache.size() >= size)
-            evict();
-        memoryCache.put(key, new Bucket<>(value));
+    abstract protected K getMinKey();
 
-        //throw new UnsupportedOperationException("not implemented");
+    public void put(K key, V value) {
+        if (memoryCache.size() >= size) {
+            evict();
+            try {
+                evictionFuture.get();
+            } catch (InterruptedException e) {
+                // что-то не так пошло.  бросаем вверх
+                throw new RuntimeException(e);
+            } catch (ExecutionException e) {
+                // что-то не так пошло.  разворачиваем и бросаем вверх
+                throw new RuntimeException(e.getCause());
+            }
+            memoryCache.put(key, new Bucket<>(value));
+        } else {
+            memoryCache.put(key, new Bucket<>(value));
+        }
     }
 
-    // если значение по ключу есть, то вернем завернутым в optional , если нет, то null
     public Optional<V> get(K key) {
-        if (memoryCache.get(key) == null) return null;
-        if (memoryCache.get(key).getAccessed() > System.currentTimeMillis() - lifetime) {
+        /** Если объект жив в кэше памяти, то достаем*/
+        if (memoryCache.get(key) != null && isAlive(memoryCache.get(key).getAccessed())) {
             memoryCache.get(key).accessedNow();
             return memoryCache.get(key).getEntity();
         } else {
-            return null;
+            /** Если объект находится в файле*/
+            if (findFile(key).isPresent()) {
+                Bucket<V> readObject = null;
+                try {
+                    /** то читаем */
+                    readObject = (Bucket<V>) new ObjectInputStream(new FileInputStream(findFile(key).get().getAbsolutePath())).readObject();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                } catch (ClassNotFoundException e) {
+                    e.printStackTrace();
+                }
+                return readObject.getEntity();
+            } else {
+                /** Если ни в одном кэше его нет, возвращаем null*/
+                return Optional.empty();
+            }
         }
-
-
-        // извлечь корзину, если ее нет вернуть null, если есть проверить по политике не истек ли
-        // срок хранения, обновить время последнего доступа accessedNow и вернуть значение
-        // throw new UnsupportedOperationException("not implemented");
     }
 
-    public void evict() {
+    /**
+     * Очищает кэш памяти
+     */
+    protected void evict() {
         if (evictionFuture != null && !evictionFuture.isDone()) {
             // уже очищаем, значит все придется ждать окончания и еще раз запустить
             try {
@@ -71,57 +99,82 @@ public class Cache<K, V> {
             }
         }
         evictionFuture = Executors.newSingleThreadExecutor().submit(() -> {
-            long minAccessed = Long.MIN_VALUE;
-            K minKey = null;
-            for (Map.Entry<K, Bucket<V>> e : memoryCache.entrySet()) {
-                if (e.getValue().getAccessed() > minAccessed) {
-                    minKey = e.getKey();
-                }
-            }
+            K minKey = getMinKey();
+
             if (minKey != null) {
+                if (isAlive(memoryCache.get(minKey).getAccessed())) {
+                    moveToFile(minKey, memoryCache.get(minKey));
+                }
                 memoryCache.remove(minKey);
-                // здесь можно вызвать событие, чтоб оповестить что ключ попар под эвикт. например второй уровень может стереть чтот из файла
             }
         });
-
     }
 
-    public synchronized void moveToFile() {
-
-        String fileName = "Cache_" + LocalDateTime.now().toString().replace(':', '-').replace('.', '-') + ".txt";
-
-        File directory = new File(logPath);
-        directory.mkdir();
-
-        File file = new File(logPath + File.separator + fileName);
-        try {
-            ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(file.getAbsoluteFile()));
-
-            for (Map.Entry<K, Bucket<V>> e : memoryCache.entrySet())
-                out.writeObject(e.getKey());
-
-            out.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-            System.exit(-1);
-        }
-
+    /**
+     * Записываем в файл
+     */
+    protected void moveToFile(K key, Bucket<V> value) {
+        /** Предварительная чистка файлов */
         if (lifetime > 0) {
+            if (cleanFolderFuture != null && !cleanFolderFuture.isDone()) {
+                // уже очищаем, значит ждём окончания и еще раз запускаем
+                try {
+                    cleanFolderFuture.get();
+                } catch (InterruptedException e) {
+                    // что-то не так пошло.  бросаем вверх
+                    throw new RuntimeException(e);
+                } catch (ExecutionException e) {
+                    // что-то не так пошло.  разворачиваем и бросаем вверх
+                    throw new RuntimeException(e.getCause());
+                }
+            }
             cleanCacheFolder();
         }
+
+        /** Проверяем существует ли файл с нашим объектом
+         *   Если нет, записываем */
+        if (!findFile(key).isPresent()) {
+
+            String fileName = key + ".txt";
+
+            new File(logPath).mkdir();
+
+            File file = new File(logPath + File.separator + fileName);
+            try {
+                ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(file.getAbsoluteFile()));
+                out.writeObject(value);
+                out.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+                System.exit(-1);
+            }
+        }
     }
 
-    public synchronized void cleanCacheFolder() {
-        String[] filesList = new File(logPath).list();
-        File file;
-        for (String f : filesList) {
-            file = new File(logPath + File.separator + f);
-
-            if (LocalDateTime.now().minusSeconds(lifetime).isAfter(Instant.ofEpochMilli(file.lastModified()).atZone(ZoneId.systemDefault()).toLocalDateTime())) {
-                file.delete();
+    /**
+     * Очищение файлового кэша
+     */
+    public void cleanCacheFolder() {
+        cleanFolderFuture = Executors.newSingleThreadExecutor().submit(() -> {
+            for (String f : new File(logPath).list()) {
+                File file = new File(logPath + File.separator + f);
+                /* Проверяем нужно ли хранить файлы*/
+                if (!isAlive(file.lastModified())) {
+                    file.delete();
+                }
             }
+        });
+    }
 
+    protected Optional<File> findFile(K key) {
+        File cacheFolder = new File(logPath);
+        if (cacheFolder.exists()) {
+            for (String f : cacheFolder.list()) {
+                if (f.contains(key.toString()))
+                    return Optional.of(new File(logPath + File.separator + f));
+            }
         }
+        return Optional.empty();
     }
 
     @Override
