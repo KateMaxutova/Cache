@@ -4,7 +4,7 @@ public class MostRequiredCacheTest extends CacheTest {
 
     {
         cache = new MostRequiredCache<>();
-        folder = "MostRequiredTestCache";
+        folder = "MostRequiredCacheTest";
     }
 
 }

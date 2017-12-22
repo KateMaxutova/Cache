@@ -4,7 +4,7 @@ public class MostNewCacheTest extends CacheTest {
 
     {
         cache = new MostNewCache<>();
-        folder = "MostNewTestCache";
+        folder = "MostNewCacheTest";
     }
 
 }

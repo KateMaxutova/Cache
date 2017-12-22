@@ -52,6 +52,7 @@ abstract public class CacheTest {
     @Test
     public void evictionTest() throws InterruptedException {
 
+        cache.cleanCacheFolder();
         cache.setSize(3);
         cache.put("foo", "foo-value");
         Thread.sleep(100);
@@ -60,11 +61,21 @@ abstract public class CacheTest {
         cache.put("bazz", "bazz-value");
         Thread.sleep(100);
         cache.put("foo-bar", "foobar-value");
+        Thread.sleep(100);
+        cache.put("car", "car-value");
+        Thread.sleep(100);
+        cache.put("boo", "boo-value");
+        Thread.sleep(100);
+        cache.put("loo", "loo-value");
+        Thread.sleep(1000);
 
-        // самый старый уходит в файл
-        Assert.assertTrue(new File(folder + File.separator + "foo.txt").exists());
-        // второй остается в памяти
-        Assert.assertEquals("bar-value", cache.get("bar").get());
+        Assert.assertEquals(new File(folder).list().length, 3);
+        // самый старый уходит
+        Assert.assertFalse(new File(folder + File.separator + "foo.txt").exists());
+        // второй остается в файле
+        Assert.assertTrue(new File(folder + File.separator + "bar.txt").exists());
+        // предпоследний в памяти
+        Assert.assertEquals("boo-value", cache.get("boo").get());
 
     }
 }

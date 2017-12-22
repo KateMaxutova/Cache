@@ -37,7 +37,9 @@ abstract public class Cache<K, V> {
         this.size = size;
     }
 
-    abstract protected K getMinKey();
+    abstract protected K getMinKey(boolean inMemory);
+
+    abstract protected void removeFromMemory(K key);
 
     public void put(K key, V value) {
         if (memoryCache.size() >= size) {
@@ -86,69 +88,50 @@ abstract public class Cache<K, V> {
      * Очищает кэш памяти
      */
     protected void evict() {
-        if (evictionFuture != null && !evictionFuture.isDone()) {
-            // уже очищаем, значит все придется ждать окончания и еще раз запустить
-            try {
-                evictionFuture.get();
-            } catch (InterruptedException e) {
-                // что-то не так пошло.  бросаем вверх
-                throw new RuntimeException(e);
-            } catch (ExecutionException e) {
-                // что-то не так пошло.  разворачиваем и бросаем вверх
-                throw new RuntimeException(e.getCause());
-            }
-        }
         evictionFuture = Executors.newSingleThreadExecutor().submit(() -> {
-            K minKey = getMinKey();
-
+            K minKey = getMinKey(true);
             if (minKey != null) {
                 if (isAlive(memoryCache.get(minKey).getAccessed())) {
-                    moveToFile(minKey, memoryCache.get(minKey));
+                    /** Предварительная чистка файлов */
+                    if (lifetime > 0) {
+                        if (cleanFolderFuture != null && !cleanFolderFuture.isDone()) {
+                            // уже очищаем, значит ждём окончания и еще раз запускаем
+                            try {
+                                cleanFolderFuture.get();
+                            } catch (InterruptedException e) {
+                                // что-то не так пошло.  бросаем вверх
+                                throw new RuntimeException(e);
+                            } catch (ExecutionException e) {
+                                // что-то не так пошло.  разворачиваем и бросаем вверх
+                                throw new RuntimeException(e.getCause());
+                            }
+                        }
+                        cleanCacheFolder();
+                    }
+
+                    /** Проверяем существует ли файл с нашим объектом
+                     *   Если нет, записываем */
+                    if (!findFile(minKey).isPresent()) {
+
+                        String fileName = minKey + ".txt";
+
+                        new File(logPath).mkdir();
+
+                        File file = new File(logPath + File.separator + fileName);
+                        try {
+                            ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(file.getAbsoluteFile()));
+                            out.writeObject(memoryCache.get(minKey));
+                            out.close();
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                            System.exit(-1);
+                        }
+                        //cleanCacheFolder();
+                    }
                 }
-                memoryCache.remove(minKey);
+                removeFromMemory(minKey);
             }
         });
-    }
-
-    /**
-     * Записываем в файл
-     */
-    protected void moveToFile(K key, Bucket<V> value) {
-        /** Предварительная чистка файлов */
-        if (lifetime > 0) {
-            if (cleanFolderFuture != null && !cleanFolderFuture.isDone()) {
-                // уже очищаем, значит ждём окончания и еще раз запускаем
-                try {
-                    cleanFolderFuture.get();
-                } catch (InterruptedException e) {
-                    // что-то не так пошло.  бросаем вверх
-                    throw new RuntimeException(e);
-                } catch (ExecutionException e) {
-                    // что-то не так пошло.  разворачиваем и бросаем вверх
-                    throw new RuntimeException(e.getCause());
-                }
-            }
-            cleanCacheFolder();
-        }
-
-        /** Проверяем существует ли файл с нашим объектом
-         *   Если нет, записываем */
-        if (!findFile(key).isPresent()) {
-
-            String fileName = key + ".txt";
-
-            new File(logPath).mkdir();
-
-            File file = new File(logPath + File.separator + fileName);
-            try {
-                ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(file.getAbsoluteFile()));
-                out.writeObject(value);
-                out.close();
-            } catch (IOException e) {
-                e.printStackTrace();
-                System.exit(-1);
-            }
-        }
     }
 
     /**
@@ -156,12 +139,16 @@ abstract public class Cache<K, V> {
      */
     public void cleanCacheFolder() {
         cleanFolderFuture = Executors.newSingleThreadExecutor().submit(() -> {
-            for (String f : new File(logPath).list()) {
+            String[] fileList = new File(logPath).list();
+            for (String f : fileList) {
                 File file = new File(logPath + File.separator + f);
                 /* Проверяем нужно ли хранить файлы*/
                 if (!isAlive(file.lastModified())) {
                     file.delete();
                 }
+            }
+            while (fileList.length > size) {
+                new File(logPath + File.separator + getMinKey(false).toString() + ".txt").delete();
             }
         });
     }
@@ -180,8 +167,15 @@ abstract public class Cache<K, V> {
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        for (Map.Entry<K, Bucket<V>> e : memoryCache.entrySet())
-            sb.append("Key : ").append(e.getKey()).append(" ; Object : ").append(e.getValue()).append("\n");
+        for (Map.Entry<K, Bucket<V>> e : memoryCache.entrySet()) {
+            sb.append("Key : ").append(e.getKey()).append(" ; Object : ");
+            if (e.getValue().getEntity().isPresent()) {
+                sb.append(e.getValue().getEntity().get());
+            } else {
+                sb.append("null");
+            }
+            sb.append("\n");
+        }
         return sb.toString();
     }
 }
