@@ -9,28 +9,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * В кэш памяти попадают и хранятся наиболее востребованные объекты.
+ * В кэш памяти попадают и хранятся последние объекты.
  * Объекты, которые вытеснены из памяти, но их срок хранения не истек, переносятся в файл.
  */
 
-public class MostRequiredCache<K, V> implements Cacheable<K, V> {
-
-    class Counter {
-
-        Integer required = 0;
-        Boolean inMemory = true;
-
-        void requiredNow() {
-            this.required++;
-        }
-    }
-
-    private ConcurrentHashMap<K, Counter> requiredCounter = new ConcurrentHashMap<>();
-
-    private void requiredNow(K key) {
-        requiredCounter.get(key).requiredNow();
-
-    }
+public class NewestCache<K, V> implements Cacheable<K, V> {
 
     protected ConcurrentHashMap<K, Bucket<V>> memoryCache = new ConcurrentHashMap<>();
     protected String logPath = "cache";
@@ -60,25 +43,31 @@ public class MostRequiredCache<K, V> implements Cacheable<K, V> {
         this.size = size;
     }
 
-
-    /**
-     * Берем ключ наименее популярного объекта
-     */
     protected K getMinKey(boolean inMemory) {
-        int minValue = Integer.MAX_VALUE;
+        long minAccessed = Long.MAX_VALUE;
         K minKey = null;
-        for (Map.Entry<K, Counter> e : requiredCounter.entrySet()) {
-            if (e.getValue().inMemory == inMemory && (e.getValue().required < minValue ||
-                    (e.getValue().required == minValue &&
-                            memoryCache.get(e.getKey()).getAccessed() < memoryCache.get(minKey).getAccessed()))) {
-                minKey = e.getKey();
+        if (inMemory) {
+            /** Ищем самый старый объект в памяти*/
+            for (Map.Entry<K, Bucket<V>> e : memoryCache.entrySet()) {
+                if (e.getValue().getAccessed() < minAccessed) {
+                    minAccessed = e.getValue().getAccessed();
+                    minKey = e.getKey();
+                }
+            }
+        } else {
+            /** Ищем самый старый объект в файлах*/
+            for (String f : new File(logPath).list()) {
+                File file = new File(logPath + File.separator + f);
+                if (file.lastModified() < minAccessed) {
+                    minAccessed = file.lastModified();
+                    minKey = (K) file.getName().replace(".txt", "");
+                }
             }
         }
         return minKey;
     }
 
     protected void removeFromMemory(K key) {
-        requiredCounter.get(key).inMemory = false;
         memoryCache.remove(key);
     }
 
@@ -98,16 +87,12 @@ public class MostRequiredCache<K, V> implements Cacheable<K, V> {
         } else {
             memoryCache.put(key, new Bucket<>(value));
         }
-        if (requiredCounter.get(key) == null) {
-            requiredCounter.put(key, new Counter());
-        }
     }
 
     public Optional<V> get(K key) {
         /** Если объект жив в кэше памяти, то достаем*/
         if (memoryCache.get(key) != null && isAlive(memoryCache.get(key).getAccessed())) {
             memoryCache.get(key).accessedNow();
-            requiredNow(key);
             return memoryCache.get(key).getEntity();
         } else if (!memoryCache.isEmpty() && findFile(key).isPresent()) {
             /** Если объект находится в файле*/
@@ -121,7 +106,6 @@ public class MostRequiredCache<K, V> implements Cacheable<K, V> {
             } catch (ClassNotFoundException e) {
                 e.printStackTrace();
             }
-            requiredNow(key);
             return readObject.getEntity();
         } else {
             /** Если ни в одном кэше его нет, возвращаем null*/

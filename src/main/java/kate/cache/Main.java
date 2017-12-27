@@ -16,10 +16,10 @@ public class Main {
         if (args.length > 0) {
             switch (args[0]) {
                 case "MR":
-                    cache = new MostRequiredCache();
+                    cache = new Cache(new MostRequiredCache());
                     break;
                 default:
-                    cache = new MostNewCache();
+                    cache = new Cache(new NewestCache());
             }
 
             if (args[1] != null) {
@@ -36,7 +36,7 @@ public class Main {
                 }
             }
         } else {
-            cache = new MostRequiredCache();
+            cache = new Cache(new MostRequiredCache());
 
             cache.put(1, "конфета");
             cache.put("tab", "пряник");
